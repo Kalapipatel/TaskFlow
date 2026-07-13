@@ -1,7 +1,7 @@
 package com.TaskFlow.UserService.service;
 
 import com.TaskFlow.UserService.dto.LoginRequest;
-import com.TaskFlow.UserService.dto.LoginRespose;
+import com.TaskFlow.UserService.dto.LoginResponse;
 import com.TaskFlow.UserService.dto.SignupRequest;
 import com.TaskFlow.UserService.dto.SignupResponse;
 import com.TaskFlow.UserService.entity.User;
@@ -23,7 +23,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
-    public LoginRespose login(LoginRequest loginRequest) {
+    public LoginResponse login(LoginRequest loginRequest) {
 
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(loginRequest.getEmail(), loginRequest.getPassword())
@@ -33,7 +33,7 @@ public class AuthService {
 
         String token = jwtUtils.generateToken(user);
 
-        return new LoginRespose(user.getUsername(), token);
+        return new LoginResponse(user.getUsername(), token);
     }
 
     public SignupResponse signup(SignupRequest signupRequest) {
@@ -55,4 +55,6 @@ public class AuthService {
 
         return new SignupResponse(user.getId(), user.getUsername());
     }
+
+
 }

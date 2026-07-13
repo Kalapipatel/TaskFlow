@@ -1,18 +1,18 @@
 package com.TaskFlow.UserService.controller;
 
 import com.TaskFlow.UserService.dto.LoginRequest;
-import com.TaskFlow.UserService.dto.LoginRespose;
+import com.TaskFlow.UserService.dto.LoginResponse;
 import com.TaskFlow.UserService.dto.SignupRequest;
 import com.TaskFlow.UserService.dto.SignupResponse;
 import com.TaskFlow.UserService.service.AuthService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-@Controller
+@RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 public class AuthController {
@@ -21,11 +21,11 @@ public class AuthController {
 
     @PostMapping("/signup")
     public ResponseEntity<SignupResponse> signup(@RequestBody SignupRequest signupRequest){
-        return ResponseEntity.ok(authService.signup(signupRequest));
+        return ResponseEntity.status(201).body(authService.signup(signupRequest));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<LoginRespose> login(@RequestBody LoginRequest loginRequest){
+    public ResponseEntity<LoginResponse> login(@RequestBody LoginRequest loginRequest){
         return ResponseEntity.ok(authService.login(loginRequest));
     }
 }
