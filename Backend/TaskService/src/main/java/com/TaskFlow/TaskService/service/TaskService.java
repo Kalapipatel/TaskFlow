@@ -10,6 +10,9 @@ import com.TaskFlow.TaskService.repository.*;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -87,6 +90,36 @@ public class TaskService {
             TaskStatus.IN_REVIEW, Set.of(TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.TODO),
             TaskStatus.DONE, Set.of(TaskStatus.IN_PROGRESS, TaskStatus.TODO)
     );
+
+
+    @Transactional(readOnly = true)
+    public TaskResponse getTaskDetail(UUID taskId) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        return buildTaskResponse(task);
+    }
+
+    private TaskResponse buildTaskResponse(Task task) {
+        String projectKey = "TEMP";
+        return TaskResponse.builder()
+                .id(task.getId())
+                .title(task.getTitle())
+                .description(task.getDescription())
+                .projectId(task.getProjectId())
+                .assigneeId(task.getAssigneeId())
+                .reporterId(task.getReporterId())
+                .status(task.getStatus())
+                .priority(task.getPriority())
+                .dueDate(task.getDueDate())
+                .taskNumber(task.getTaskNumber())
+                .taskKey(projectKey + "-" + task.getTaskNumber())
+                .labelIds(task.getLabelIds())
+                .createdAt(task.getCreatedAt())
+                .updatedAt(task.getUpdatedAt())
+                .completedAt(task.getCompletedAt())
+                .build();
+    }
 
 
     @Transactional
@@ -202,8 +235,8 @@ public class TaskService {
     public BoardResponse getKanbanBoard(UUID projectId, int doneOffset, int doneLimit) {
         // TODO (Phase 3): Add Feign validation to ensure project exists and requester is a member
 
-        List<Task> activeTasks = taskRepository.findActiveBoardTasks(projectId);
-        List<Task> doneTasks = taskRepository.findDoneBoardTasks(projectId, doneLimit, doneOffset);
+        List<Task> activeTasks = taskRepository.findActiveBoardTasks(projectId.toString());
+        List<Task> doneTasks = taskRepository.findDoneBoardTasks(projectId.toString(), doneLimit, doneOffset);
 
         Map<TaskStatus, List<TaskSummary>> groupedActive = activeTasks.stream()
                 .map(this::mapToSummary)
@@ -236,6 +269,271 @@ public class TaskService {
                 .labelIds(task.getLabelIds())
                 .isOverdue(isOverdue)
                 .build();
+    }
+
+
+    @Transactional(readOnly = true)
+    public Page<TaskSummary> searchTasks(
+            UUID projectId, TaskStatus status, TaskPriority priority,
+            UUID assigneeId, String search, LocalDate dueBefore,
+            UUID labelId, Pageable pageable) {
+
+        // TODO (Phase 3): Add Feign validation to ensure project exists and requester is a member
+
+        // Base criteria: Task must belong to the project
+        Specification<Task> spec = Specification.where(TaskSpecification.hasProjectId(projectId));
+
+        // Dynamically chain filters only if parameters are explicitly provided
+        if (status != null) spec = spec.and(TaskSpecification.hasStatus(status));
+        if (priority != null) spec = spec.and(TaskSpecification.hasPriority(priority));
+        if (assigneeId != null) spec = spec.and(TaskSpecification.hasAssigneeId(assigneeId));
+        if (search != null && !search.isBlank()) spec = spec.and(TaskSpecification.titleContainsIgnoreCase(search));
+        if (dueBefore != null) spec = spec.and(TaskSpecification.dueBefore(dueBefore));
+        if (labelId != null) spec = spec.and(TaskSpecification.hasLabelId(labelId));
+
+        Page<Task> taskPage = taskRepository.findAll(spec, pageable);
+
+        return taskPage.map(this::mapToSummary); // Utilizing existing mapToSummary method
+    }
+
+
+    @Transactional
+    public void attachLabels(UUID requesterId, UUID taskId, AttachLabelsRequest req) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        // TODO (Phase 3): Verify requester is a member of the project via Project Service Feign client.[cite: 1]
+        // TODO (Phase 3): Call Label Service to validate all label IDs belong to this project.
+
+        Set<UUID> currentLabels = task.getLabelIds();
+        List<TaskHistory> historyEntries = new ArrayList<>();
+
+        for (UUID labelId : req.getLabelIds()) {
+            // Only add and record history if the label isn't already attached (idempotent)[cite: 1]
+            if (!currentLabels.contains(labelId)) {
+                currentLabels.add(labelId);
+
+                historyEntries.add(TaskHistory.builder()
+                        .task(task)
+                        .changedBy(requesterId)
+                        .fieldName("label_id")
+                        .oldValue(null)
+                        .newValue(labelId.toString())
+                        .build());
+            }
+        }
+
+        if (!historyEntries.isEmpty()) {
+            taskHistoryRepository.saveAll(historyEntries);
+            taskRepository.save(task); // Hibernate automatically manages the task_labels junction table rows
+        }
+    }
+
+    @Transactional
+    public void removeLabel(UUID requesterId, UUID taskId, UUID labelId) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        // TODO (Phase 3): Verify requester is a member of the project via Project Service Feign client.[cite: 1]
+
+        if (task.getLabelIds().contains(labelId)) {
+            task.getLabelIds().remove(labelId);
+
+            TaskHistory history = TaskHistory.builder()
+                    .task(task)
+                    .changedBy(requesterId)
+                    .fieldName("label_id")
+                    .oldValue(labelId.toString())
+                    .newValue(null)
+                    .build();
+
+            taskHistoryRepository.save(history);
+            taskRepository.save(task); // Hibernate automatically removes the row from task_labels
+        }
+    }
+
+    @Transactional
+    public void deleteTask(UUID requesterId, UUID taskId) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        // TODO (Phase 3): Verify requester role via Project Service Feign Client.
+        // MembershipResponse membership = projectClient.getMembership(task.getProjectId(), requesterId);
+        // if (!"ADMIN".equals(membership.role()) && !"OWNER".equals(membership.role())) {
+        //     throw new InsufficientRoleException("ADMIN or OWNER");
+        // }
+
+        // TODO (Phase 3): Synchronous Saga Pattern for Comment Cleanup.
+        // Since you are not using Kafka, we must synchronously instruct the Comment Service
+        // to delete its orphaned records before we delete the task.
+        // try {
+        //     commentClient.deleteCommentsForTask(taskId);
+        // } catch (Exception e) {
+        //     throw new ServiceUnavailableException("Comment Service"); // Abort task deletion if cleanup fails[cite: 1]
+        // }
+
+        // Delete the task.
+        // Note: Because task_labels and task_history foreign keys were defined with
+        // ON DELETE CASCADE in the database schema, Hibernate/PostgreSQL will automatically
+        // wipe the associated audit logs and label associations for us.[cite: 2]
+        taskRepository.delete(task);
+    }
+
+
+    @Transactional(readOnly = true)
+    public List<TaskHistoryResponse> getTaskHistory(UUID taskId) {
+        if (!taskRepository.existsById(taskId)) {
+            throw new TaskNotFoundException(taskId);
+        }
+
+        return taskHistoryRepository.findByTaskIdOrderByChangedAtDesc(taskId).stream()
+                .map(this::mapToHistoryResponse)
+                .toList();
+    }
+
+    private TaskHistoryResponse mapToHistoryResponse(TaskHistory history) {
+        String humanReadable = "Updated " + history.getFieldName();
+
+        if ("status".equals(history.getFieldName())) {
+            humanReadable = "moved this from " + history.getOldValue() + " to " + history.getNewValue();
+        } else if ("assignee_id".equals(history.getFieldName())) {
+            if (history.getNewValue() == null) {
+                humanReadable = "unassigned this task";
+            } else {
+                // TODO (Phase 3): Map UUID to human-readable names via User Service batch call[cite: 2]
+                humanReadable = "assigned this to " + history.getNewValue();
+            }
+        } else if ("created".equals(history.getFieldName())) {
+            humanReadable = "created this task";
+        } else if ("label_id".equals(history.getFieldName())) {
+            if (history.getNewValue() == null) {
+                humanReadable = "removed a label";
+            } else {
+                humanReadable = "added a label";
+            }
+        }
+
+        return TaskHistoryResponse.builder()
+                .id(history.getId())
+                .changedBy(history.getChangedBy())
+                .fieldName(history.getFieldName())
+                .oldValue(history.getOldValue())
+                .newValue(history.getNewValue())
+                .changedAt(history.getChangedAt())
+                .humanReadable(humanReadable)
+                .build();
+    }
+
+    /**
+     * PUT /api/v1/tasks/{taskId}/status
+     * Dedicated endpoint for status updates to enforce strict state machine rules.
+     */
+    @Transactional
+    public TaskResponse updateTaskStatus(UUID requesterId, UUID taskId, UpdateTaskStatusRequest req) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        if (task.getStatus() == req.getStatus()) {
+            return buildTaskResponse(task); // No-op if status already matches
+        }
+
+        // Enforce the strict state machine transitions
+        validateStatusTransition(task.getStatus(), req.getStatus());
+
+        List<TaskHistory> history = new ArrayList<>();
+        addHistory(history, task, requesterId, "status", task.getStatus().name(), req.getStatus().name());
+
+        if (req.getStatus() == TaskStatus.DONE) {
+            task.setCompletedAt(Instant.now());
+        } else if (task.getStatus() == TaskStatus.DONE) {
+            task.setCompletedAt(null); // Reopen logic
+        }
+
+        task.setStatus(req.getStatus());
+        taskHistoryRepository.saveAll(history);
+        task = taskRepository.save(task);
+
+        // TODO (Phase 3): Publish task-service.task.status.changed Kafka event
+
+        return buildTaskResponse(task);
+    }
+
+    /**
+     * PUT /api/v1/tasks/{taskId}/assign
+     */
+    @Transactional
+    public TaskResponse assignTask(UUID requesterId, UUID taskId, AssignTaskRequest req) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        // TODO (Phase 3): Call Project Service via Feign to ensure Assignee is a member
+
+        if (req.getAssigneeId().equals(task.getAssigneeId())) {
+            return buildTaskResponse(task);
+        }
+
+        List<TaskHistory> history = new ArrayList<>();
+        String oldVal = task.getAssigneeId() != null ? task.getAssigneeId().toString() : null;
+        addHistory(history, task, requesterId, "assignee_id", oldVal, req.getAssigneeId().toString());
+
+        task.setAssigneeId(req.getAssigneeId());
+        taskHistoryRepository.saveAll(history);
+        task = taskRepository.save(task);
+
+        // TODO (Phase 3): Publish task-service.task.assigned Kafka event
+
+        return buildTaskResponse(task);
+    }
+
+    /**
+     * DELETE /api/v1/tasks/{taskId}/assign
+     */
+    @Transactional
+    public TaskResponse unassignTask(UUID requesterId, UUID taskId) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        if (task.getAssigneeId() == null) {
+            return buildTaskResponse(task);
+        }
+
+        List<TaskHistory> history = new ArrayList<>();
+        addHistory(history, task, requesterId, "assignee_id", task.getAssigneeId().toString(), null);
+
+        task.setAssigneeId(null);
+        taskHistoryRepository.saveAll(history);
+        task = taskRepository.save(task);
+
+        return buildTaskResponse(task);
+    }
+
+
+
+    /**
+     * INTERNAL API: Fetches a single task to verify existence and return context.
+     * Used by Comment Service to ensure a task exists before allowing comments[cite: 2].
+     */
+    @Transactional(readOnly = true)
+    public TaskSummary getInternalTask(UUID taskId) {
+        Task task = taskRepository.findById(taskId)
+                .orElseThrow(() -> new TaskNotFoundException(taskId));
+
+        return mapToSummary(task);
+    }
+
+    /**
+     * INTERNAL API: Batch fetches tasks to avoid N+1 Feign calls.
+     * Essential for performance when other services need metadata for multiple tasks at once[cite: 2].
+     */
+    @Transactional(readOnly = true)
+    public List<TaskSummary> getTasksBatch(List<UUID> taskIds) {
+        List<Task> tasks = taskRepository.findAllById(taskIds);
+
+        // Return mapped summaries. We don't throw an error if some IDs are missing,
+        // we just return what was found to allow graceful degradation[cite: 2].
+        return tasks.stream()
+                .map(this::mapToSummary)
+                .toList();
     }
 
 }

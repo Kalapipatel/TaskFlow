@@ -3,6 +3,7 @@ package com.TaskFlow.TaskService.repository;
 import com.TaskFlow.TaskService.entity.Task;
 import com.TaskFlow.TaskService.enums.TaskStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -12,7 +13,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface TaskRepository extends JpaRepository<Task, UUID> {
+public interface TaskRepository extends JpaRepository<Task, UUID>, JpaSpecificationExecutor<Task> {
 
     // PERFECT MATCH for our idx_tasks_project_status composite index.
     // Extremely fast for loading specific Kanban columns (e.g., all "TODO" tasks in a project).
@@ -47,9 +48,9 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
               END DESC, 
               created_at ASC
             """, nativeQuery = true)
-    List<Task> findActiveBoardTasks(@Param("projectId") UUID projectId);
+    List<Task> findActiveBoardTasks(@Param("projectId") String projectId);
 
-    // Separated DONE query to exclusively support OFFSET/LIMIT pagination
+    // FIX: Changed @Param("projectId") from UUID to String to prevent MySQL binary mismatch
     @Query(value = """
             SELECT * FROM tasks 
             WHERE project_id = :projectId 
@@ -65,7 +66,7 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
             LIMIT :limit OFFSET :offset
             """, nativeQuery = true)
     List<Task> findDoneBoardTasks(
-            @Param("projectId") UUID projectId,
+            @Param("projectId") String projectId,
             @Param("limit") int limit,
             @Param("offset") int offset);
 }

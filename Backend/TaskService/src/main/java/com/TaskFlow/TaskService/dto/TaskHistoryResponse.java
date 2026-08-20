@@ -21,4 +21,6 @@ public class TaskHistoryResponse {
     private String oldValue;
     private String newValue;
     private Instant changedAt;
+
+    private String humanReadable;
 }
